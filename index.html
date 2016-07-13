@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>Search with Query Task</title>
+
+  <link rel="stylesheet" href="https://js.arcgis.com/4.0/esri/css/main.css">
+  
+  <style>
+    html, body, #viewDiv {
+      padding: 0;
+      margin: 0;
+      height: 100%;
+    }
+  </style>
+
+  <script src="https://js.arcgis.com/4.0/"></script>
+
+  <script>
+    require([
+      "esri/Map",
+      "esri/views/MapView",
+      "esri/layers/FeatureLayer",
+      "esri/layers/TileLayer",
+      "esri/tasks/QueryTask",
+      "esri/tasks/support/Query",
+      "esri/Graphic",
+      "esri/layers/GraphicsLayer",
+      "esri/symbols/SimpleLineSymbol",
+      "esri/geometry/Polyline",
+      "esri/geometry/geometryEngine",
+      "esri/core/watchUtils",
+      "dojo/on",
+      "dojo/dom",
+      "dojo/domReady!"
+    ], function(Map, MapView, FeatureLayer, TileLayer, QueryTask, Query, Graphic, GraphicsLayer, SimpleLineSymbol, Polyline, geometryEngine, watchUtils, on, dom) {
+
+      var totalAnimationDuration = 30.0;
+      var segmentAnimationDuration;
+      var maxFramesPerSecond = 30;
+      var framesPerSegment;
+      var totalLineGraphicsLayer = new GraphicsLayer({
+        spatialReference: {
+          wkid: 102100
+        }
+      });
+      var backingGraphicsLayer = new GraphicsLayer({
+        spatialReference: {
+          wkid: 102100
+        }
+      });
+
+      var map = new Map({
+        basemap: {
+          baseLayers: [new TileLayer({
+            url: "http://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer"
+          })]
+        },
+        layers: [backingGraphicsLayer, totalLineGraphicsLayer]
+      });
+
+      var view = new MapView({
+        container: "viewDiv",
+        map: map,
+        center: [-122.68, 45.52], // lon, lat
+        zoom: 15
+      });
+
+      // Create query task to reference the PDX_Rail_Stops_Styled feature layer      
+      var queryTask = new QueryTask({
+        url: "http://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0"
+      });
+
+      // Only return three fields
+      var query = new Query({
+        returnGeometry: true,
+        outFields: ["City", "State", "Visit_Order"],
+        where: "1=1",
+        orderByFields: ["Visit_Order"]
+      });
+
+      // Perform query when page loads
+      getFeatures();
+
+      // Get features with sql clause
+      function getFeatures() {
+        queryTask.execute(query).then(function(results) {
+          if (!view.ready) {
+            watchUtils.whenTrueOnce(view, "ready", function() {
+              addFeatures(results.features);
+            })
+          } else {
+            addFeatures(results.features);
+          }
+        });
+      }
+
+      // Add features as graphics
+      function addFeatures(features) {
+        var lineSymbol = new SimpleLineSymbol({
+          color: [0, 0, 255, 0.5],
+          width: 4,
+        });
+
+        var linesAndCities = [];
+        var previousCity = undefined;
+
+        for (var i=0; i < features.length; i++) {
+          var currentCity = features[i];
+          if (previousCity !== undefined) {
+            var prevPoint = previousCity.geometry,
+                currPoint = currentCity.geometry,
+                lineBetweenCities = new Polyline({
+                  paths: [[prevPoint.x, prevPoint.y], [currPoint.x, currPoint.y]],
+                  spatialReference: {
+                    wkid: 102100
+                  }
+                });
+
+            linesAndCities.push({
+              startCity: previousCity,
+              endCity: currentCity,
+              line: lineBetweenCities
+            });
+          }
+          previousCity = currentCity;
+        }
+
+        segmentAnimationDuration = totalAnimationDuration / linesAndCities.length;
+        framesPerSegment = segmentAnimationDuration * maxFramesPerSecond;
+
+        // Set Draw each feature...
+        var graphics = [];
+        for (var i=0; i < linesAndCities.length; i++) {
+          var lineData = linesAndCities[i],
+              lineLength = geometryEngine.geodesicLength(lineData.line, "miles"),
+              segmentLength = lineLength / framesPerSegment,
+              densifiedLine = geometryEngine.geodesicDensify(lineData.line, segmentLength, "miles");
+
+          lineData.geodesicLine = densifiedLine;
+
+          var lineGraphic = new Graphic({
+                geometry: densifiedLine,
+                symbol: lineSymbol
+              });
+
+          graphics.push(lineGraphic);
+        }
+        // Add graphics
+        backingGraphicsLayer.removeAll();
+        backingGraphicsLayer.addMany(graphics);
+        view.goTo(graphics);
+        view.popup.visible = false;
+
+        animateLines();
+
+        function animateLines() {
+          var start;
+          var currentIndex = 0;
+          var lastPointCount = 0;
+
+          var completedSegmentsPolyline = new Polyline({
+            spatialReference: {
+              wkid: 102100
+            }
+          });
+
+          var totalGraphic = new Graphic({
+            symbol: new SimpleLineSymbol({
+              color: [255,0,0, 1],
+              width: 3
+            })
+          });
+
+          totalLineGraphicsLayer.removeAll();
+          totalLineGraphicsLayer.add(totalGraphic);
+          
+          window.requestAnimationFrame(updateLine); 
+          
+          function updateLine(timeStamp) { 
+            if (!start) {
+              start = timeStamp;
+            }
+
+            var currentSegmentInfo = linesAndCities[currentIndex];
+            var subLine = getSubline(currentSegmentInfo.geodesicLine, timeStamp, start, segmentAnimationDuration * 1000);
+
+            var subLineCount = pointsInLine(subLine);
+
+            // if (subLineCount == lastPointCount) {
+            //   window.requestAnimationFrame(updateLine);
+            // }
+            // lastPointCount = subLineCount;
+
+            var segmentProgress = subLineCount / pointsInLine(currentSegmentInfo.geodesicLine);
+
+            var totalTravelLine = completedSegmentsPolyline.paths.length == 0 ? subLine : geometryEngine.union([completedSegmentsPolyline, subLine]);
+
+            totalGraphic = new Graphic({
+              geometry: totalTravelLine,
+              symbol: new SimpleLineSymbol({
+                color: [255,0,0],
+                width: 3
+              })
+            });
+
+            // totalGraphic.geometry = totalTravelLine;
+
+            totalLineGraphicsLayer.removeAll();
+            totalLineGraphicsLayer.add(totalGraphic);
+
+            var segLen = geometryEngine.geodesicLength(subLine, "miles");
+            var totLen = geometryEngine.geodesicLength(totalTravelLine, "miles");
+
+            console.log(Math.round(segmentProgress*100) + "% done with segment " + (currentIndex+1) + " of " + linesAndCities.length + " [" + segLen + " miles, total " + totLen + " miles]");
+
+            if (segmentProgress == 1) {
+              for (var p=0; p < subLine.paths.length; p++) {
+                completedSegmentsPolyline.addPath(subLine.paths[p]);
+              }
+              currentIndex += 1;
+              start = undefined;
+              lastPointCount = 0;
+            }
+
+            if (currentIndex < linesAndCities.length) {
+              window.requestAnimationFrame(updateLine); 
+            }
+          }
+        }
+
+      }
+
+      function pointsInLine(polyline) {
+        var pointCount = 0;
+        for (var p=0; p < polyline.paths.length; p++) {
+          pointCount += polyline.paths[p].length;
+        }
+        return pointCount;
+      }
+
+
+      function getSubline(totalLine, timeStamp, startTime, duration) {
+        var progress = (timeStamp - startTime) / duration,
+            lastPointIndex = Math.round(framesPerSegment * progress);
+
+        // Assuming a single path with multiple points
+        var subLine = new Polyline({
+          paths: [totalLine.paths[0].slice(0,Math.max(0,lastPointIndex))],
+          spatialReference: totalLine.spatialReference
+        })
+        
+        return subLine;
+      }
+
+    });
+  </script>
+</head>
+
+<body>
+  <div id="viewDiv"></div>
+</body>
+</html>
