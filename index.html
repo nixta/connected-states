@@ -59,7 +59,7 @@
         }
       });
       var stopsLayer = new FeatureLayer({
-        url: "http://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0",
+        url: "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0",
         definitionExpression: "Visit_Order < 0"
       });
 
@@ -72,7 +72,7 @@
       var map = new Map({
         basemap: {
           baseLayers: [new TileLayer({
-            url: "http://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer"
+            url: "https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer"
           })]
         },
         layers: [
@@ -92,7 +92,7 @@
 
       // Create query task to reference the PDX_Rail_Stops_Styled feature layer      
       var queryTask = new QueryTask({
-        url: "http://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0"
+        url: "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0"
       });
 
       // Only return three fields
