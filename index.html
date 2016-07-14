@@ -60,7 +60,7 @@
       });
       var stopsLayer = new FeatureLayer({
         url: "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0",
-        definitionExpression: "Visit_Order < 0"
+        definitionExpression: "Sequence < 0"
       });
 
       stopsLayer.watch('loaded', function(newVal, oldVal) {
@@ -90,7 +90,7 @@
         zoom: 15
       });
 
-      // Create query task to reference the PDX_Rail_Stops_Styled feature layer      
+      // Create query task to load the stops      
       var queryTask = new QueryTask({
         url: "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0"
       });
@@ -98,9 +98,9 @@
       // Only return three fields
       var query = new Query({
         returnGeometry: true,
-        outFields: ["City", "State", "Visit_Order"],
+        outFields: ["City", "State", "Sequence"],
         where: "1=1",
-        orderByFields: ["Visit_Order"]
+        orderByFields: ["Sequence"]
       });
 
       // Perform query when page loads
@@ -187,7 +187,14 @@
         view.goTo(graphics);
         view.popup.visible = false;
 
-        animateLines();
+        view.on("click", function() {
+          view.ui.empty("top-left");
+          document.body.style.cursor = 'none';
+          // Delay the animation very slightly from clearing the UI
+          // This allows us to cut appropriately in Video Editing software if recording
+          // the animation...
+          window.setTimeout(function(){ animateLines(); }, 750);
+        });
 
         function animateLines() {
           var start;
@@ -282,8 +289,8 @@
         var rightAlignCities = [8,16,17,18,19,21,28,30,34,35,36,37,39,40,43];
 
         function labelCity(city) {
-          var yOffset = (yOffsetCities.indexOf(city.attributes.Visit_Order) > -1) ? -14 : 7;
-          var alignment = (leftAlignCities.indexOf(city.attributes.Visit_Order) > -1) ? "left" : ((rightAlignCities.indexOf(city.attributes.Visit_Order) > -1) ? "right" : "center");
+          var yOffset = (yOffsetCities.indexOf(city.attributes.Sequence) > -1) ? -14 : 7;
+          var alignment = (leftAlignCities.indexOf(city.attributes.Sequence) > -1) ? "left" : ((rightAlignCities.indexOf(city.attributes.Sequence) > -1) ? "right" : "center");
 
           var labelGraphic = new Graphic({
             geometry: city.geometry,
@@ -291,7 +298,7 @@
               color: "white",
               haloColor: "black",
               haloSize: "3px",
-              text: city.attributes.City, // city.attributes.Visit_Order + ": " + city.attributes.City
+              text: city.attributes.City, // city.attributes.Sequence + ": " + city.attributes.City
               xoffset: 0,
               yoffset: yOffset,
               horizontalAlignment: alignment,
