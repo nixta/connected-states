@@ -27,14 +27,16 @@
       "esri/tasks/support/Query",
       "esri/Graphic",
       "esri/layers/GraphicsLayer",
+      "esri/symbols/SimpleMarkerSymbol",
       "esri/symbols/SimpleLineSymbol",
+      "esri/symbols/TextSymbol",
       "esri/geometry/Polyline",
       "esri/geometry/geometryEngine",
       "esri/core/watchUtils",
       "dojo/on",
       "dojo/dom",
       "dojo/domReady!"
-    ], function(Map, MapView, FeatureLayer, TileLayer, QueryTask, Query, Graphic, GraphicsLayer, SimpleLineSymbol, Polyline, geometryEngine, watchUtils, on, dom) {
+    ], function(Map, MapView, FeatureLayer, TileLayer, QueryTask, Query, Graphic, GraphicsLayer, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol, Polyline, geometryEngine, watchUtils, on, dom) {
 
       var totalAnimationDuration = 30.0;
       var segmentAnimationDuration;
@@ -48,6 +50,22 @@
       var backingGraphicsLayer = new GraphicsLayer({
         spatialReference: {
           wkid: 102100
+        },
+        visible: false
+      });
+      var citiesGraphicsLayer = new GraphicsLayer({
+        spatialReference: {
+          wkid: 102100
+        }
+      });
+      var stopsLayer = new FeatureLayer({
+        url: "http://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0",
+        definitionExpression: "Visit_Order < 0"
+      });
+
+      stopsLayer.watch('loaded', function(newVal, oldVal) {
+        if (newVal == true && oldVal == false) {
+          citiesGraphicsLayer.renderer = stopsLayer.renderer;
         }
       });
 
@@ -57,7 +75,12 @@
             url: "http://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer"
           })]
         },
-        layers: [backingGraphicsLayer, totalLineGraphicsLayer]
+        layers: [
+          backingGraphicsLayer, 
+          totalLineGraphicsLayer, 
+          citiesGraphicsLayer,
+          stopsLayer
+        ]
       });
 
       var view = new MapView({
@@ -102,12 +125,23 @@
           color: [0, 0, 255, 0.5],
           width: 4,
         });
+        var citySymbol = new SimpleMarkerSymbol({
+          style: "circle",
+          color: [194,194,194,0.5],
+          size: "10px",  // pixels
+          outline: {  // autocasts as esri/symbols/SimpleLineSymbol
+            color: [153,153,153],
+            width: 1.125  // points
+          }
+        });
 
         var linesAndCities = [];
         var previousCity = undefined;
 
         for (var i=0; i < features.length; i++) {
           var currentCity = features[i];
+          currentCity.symbol = citySymbol;
+
           if (previousCity !== undefined) {
             var prevPoint = previousCity.geometry,
                 currPoint = currentCity.geometry,
@@ -184,14 +218,20 @@
             }
 
             var currentSegmentInfo = linesAndCities[currentIndex];
+            if (currentIndex == 0) {
+              showCity(currentSegmentInfo.startCity);
+            }
+
+
             var subLine = getSubline(currentSegmentInfo.geodesicLine, timeStamp, start, segmentAnimationDuration * 1000);
 
             var subLineCount = pointsInLine(subLine);
 
-            // if (subLineCount == lastPointCount) {
-            //   window.requestAnimationFrame(updateLine);
-            // }
-            // lastPointCount = subLineCount;
+            if (subLineCount == lastPointCount) {
+              window.requestAnimationFrame(updateLine);
+              return
+            }
+            lastPointCount = subLineCount;
 
             var segmentProgress = subLineCount / pointsInLine(currentSegmentInfo.geodesicLine);
 
@@ -213,7 +253,7 @@
             var segLen = geometryEngine.geodesicLength(subLine, "miles");
             var totLen = geometryEngine.geodesicLength(totalTravelLine, "miles");
 
-            console.log(Math.round(segmentProgress*100) + "% done with segment " + (currentIndex+1) + " of " + linesAndCities.length + " [" + segLen + " miles, total " + totLen + " miles]");
+            // console.log(Math.round(segmentProgress*100) + "% done with segment " + (currentIndex+1) + " of " + linesAndCities.length + " [" + segLen + " miles, total " + totLen + " miles]");
 
             if (segmentProgress == 1) {
               for (var p=0; p < subLine.paths.length; p++) {
@@ -222,12 +262,48 @@
               currentIndex += 1;
               start = undefined;
               lastPointCount = 0;
+
+              showCity(currentSegmentInfo.endCity);
             }
 
             if (currentIndex < linesAndCities.length) {
               window.requestAnimationFrame(updateLine); 
             }
           }
+        }
+
+        function showCity(city) {
+          citiesGraphicsLayer.add(city);
+          labelCity(city);
+        }
+
+        var yOffsetCities = [3,4,9,13,17,19,20,23,25,30,42];
+        var leftAlignCities = [1,5,6,11,15,22,23,24,27,33,38,42,44];
+        var rightAlignCities = [8,16,17,18,19,21,28,30,34,35,36,37,39,40,43];
+
+        function labelCity(city) {
+          var yOffset = (yOffsetCities.indexOf(city.attributes.Visit_Order) > -1) ? -14 : 7;
+          var alignment = (leftAlignCities.indexOf(city.attributes.Visit_Order) > -1) ? "left" : ((rightAlignCities.indexOf(city.attributes.Visit_Order) > -1) ? "right" : "center");
+
+          var labelGraphic = new Graphic({
+            geometry: city.geometry,
+            symbol: new TextSymbol({
+              color: "white",
+              haloColor: "black",
+              haloSize: "3px",
+              text: city.attributes.City, // city.attributes.Visit_Order + ": " + city.attributes.City
+              xoffset: 0,
+              yoffset: yOffset,
+              horizontalAlignment: alignment,
+              font: {  // autocast as esri/symbols/Font
+                size: 12,
+                family: "sans-serif",
+                weight: "light"
+              }
+            })
+          });
+
+          citiesGraphicsLayer.add(labelGraphic);
         }
 
       }
