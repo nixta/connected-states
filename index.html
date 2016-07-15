@@ -13,6 +13,19 @@
       margin: 0;
       height: 100%;
     }
+
+    #instructions {
+      padding: 0.9em;
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background-color: #DDD;
+      text-align: center;
+      border-radius: 5px;
+      z-index: 1000;
+      font-family: Sans-Serif;
+      pointer-events: none;
+    }
   </style>
 
   <script src="https://js.arcgis.com/4.0/"></script>
@@ -23,6 +36,7 @@
       "esri/views/MapView",
       "esri/layers/FeatureLayer",
       "esri/layers/TileLayer",
+      "esri/renderers/SimpleRenderer",
       "esri/tasks/QueryTask",
       "esri/tasks/support/Query",
       "esri/Graphic",
@@ -32,43 +46,41 @@
       "esri/symbols/TextSymbol",
       "esri/geometry/Polyline",
       "esri/geometry/geometryEngine",
+      "esri/widgets/Zoom",
       "esri/core/watchUtils",
-      "dojo/on",
-      "dojo/dom",
+      "dojo/Deferred",
       "dojo/domReady!"
-    ], function(Map, MapView, FeatureLayer, TileLayer, QueryTask, Query, Graphic, GraphicsLayer, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol, Polyline, geometryEngine, watchUtils, on, dom) {
+    ], function(Map, MapView, FeatureLayer, TileLayer, SimpleRenderer, QueryTask, Query, Graphic, GraphicsLayer, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol, Polyline, geometryEngine, Zoom, watchUtils, Deferred) {
 
       var totalAnimationDuration = 30.0;
-      var segmentAnimationDuration;
       var maxFramesPerSecond = 30;
-      var framesPerSegment;
-      var totalLineGraphicsLayer = new GraphicsLayer({
-        spatialReference: {
-          wkid: 102100
-        }
-      });
-      var backingGraphicsLayer = new GraphicsLayer({
-        spatialReference: {
-          wkid: 102100
-        },
-        visible: false
-      });
-      var citiesGraphicsLayer = new GraphicsLayer({
-        spatialReference: {
-          wkid: 102100
-        }
-      });
-      var stopsLayer = new FeatureLayer({
-        url: "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0",
-        definitionExpression: "Sequence < 0"
-      });
+      var stopsServiceURL = "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0";
 
-      stopsLayer.watch('loaded', function(newVal, oldVal) {
-        if (newVal == true && oldVal == false) {
-          citiesGraphicsLayer.renderer = stopsLayer.renderer;
-        }
-      });
+      var hopsGraphicsLayer = new GraphicsLayer({
+            renderer: new SimpleRenderer({
+              symbol: new SimpleLineSymbol({
+                color: [255,0,0, 1],
+                width: 3
+              })
+            })
+          }),
+          citiesGraphicsLayer = new GraphicsLayer({
+            renderer: new SimpleRenderer({
+              symbol: new SimpleMarkerSymbol({
+                style: "circle",
+                color: [194,194,194,0.5],
+                size: "10px",  // pixels
+                outline: {  // autocasts as esri/symbols/SimpleLineSymbol
+                  color: [153,153,153],
+                  width: 1.125  // points
+                }
+              })
+            })
+          });
 
+
+
+      // Create the map.
       var map = new Map({
         basemap: {
           baseLayers: [new TileLayer({
@@ -76,23 +88,23 @@
           })]
         },
         layers: [
-          backingGraphicsLayer, 
-          totalLineGraphicsLayer, 
-          citiesGraphicsLayer,
-          stopsLayer
+          hopsGraphicsLayer,
+          citiesGraphicsLayer
         ]
       });
 
       var view = new MapView({
         container: "viewDiv",
         map: map,
-        center: [-122.68, 45.52], // lon, lat
-        zoom: 15
+        center: [-100.68, 45.52], // lon, lat
+        zoom: 10
       });
+
+
 
       // Create query task to load the stops      
       var queryTask = new QueryTask({
-        url: "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0"
+        url: stopsServiceURL
       });
 
       // Only return three fields
@@ -103,218 +115,234 @@
         orderByFields: ["Sequence"]
       });
 
-      // Perform query when page loads
-      getFeatures();
+      // Perform query when page loads, parse the data, and prepare the data for animation.
+      queryTask.execute(query).then(function(results) {
+        watchUtils.whenTrueOnce(view, "ready", function() {
+          var cityHops = parseCityHops(results.features);
 
-      // Get features with sql clause
-      function getFeatures() {
-        queryTask.execute(query).then(function(results) {
-          if (!view.ready) {
-            watchUtils.whenTrueOnce(view, "ready", function() {
-              addFeatures(results.features);
-            })
-          } else {
-            addFeatures(results.features);
-          }
+          // Zoom Map
+          view.goTo(cityHops.map(function(hop) {
+            return hop.line;
+          }));
+
+          cueCityHopsAnimation(cityHops);
         });
-      }
+      });
 
-      // Add features as graphics
-      function addFeatures(features) {
-        var lineSymbol = new SimpleLineSymbol({
-          color: [0, 0, 255, 0.5],
-          width: 4,
-        });
-        var citySymbol = new SimpleMarkerSymbol({
-          style: "circle",
-          color: [194,194,194,0.5],
-          size: "10px",  // pixels
-          outline: {  // autocasts as esri/symbols/SimpleLineSymbol
-            color: [153,153,153],
-            width: 1.125  // points
-          }
-        });
 
-        var linesAndCities = [];
-        var previousCity = undefined;
 
-        for (var i=0; i < features.length; i++) {
-          var currentCity = features[i];
-          currentCity.symbol = citySymbol;
 
-          if (previousCity !== undefined) {
-            var prevPoint = previousCity.geometry,
-                currPoint = currentCity.geometry,
-                lineBetweenCities = new Polyline({
-                  paths: [[prevPoint.x, prevPoint.y], [currPoint.x, currPoint.y]],
-                  spatialReference: {
-                    wkid: 102100
-                  }
-                });
+      function cueCityHopsAnimation(cityHops) {
+        var hopAnimationDuration = totalAnimationDuration / cityHops.length,
+            framesPerHop = hopAnimationDuration * maxFramesPerSecond;
 
-            linesAndCities.push({
-              startCity: previousCity,
-              endCity: currentCity,
-              line: lineBetweenCities
-            });
-          }
-          previousCity = currentCity;
-        }
+        var clickEvent = view.on("click", startAnimation);
 
-        segmentAnimationDuration = totalAnimationDuration / linesAndCities.length;
-        framesPerSegment = segmentAnimationDuration * maxFramesPerSecond;
-
-        // Set Draw each feature...
-        var graphics = [];
-        for (var i=0; i < linesAndCities.length; i++) {
-          var lineData = linesAndCities[i],
-              lineLength = geometryEngine.geodesicLength(lineData.line, "miles"),
-              segmentLength = lineLength / framesPerSegment,
-              densifiedLine = geometryEngine.geodesicDensify(lineData.line, segmentLength, "miles");
-
-          lineData.geodesicLine = densifiedLine;
-
-          var lineGraphic = new Graphic({
-                geometry: densifiedLine,
-                symbol: lineSymbol
-              });
-
-          graphics.push(lineGraphic);
-        }
-        // Add graphics
-        backingGraphicsLayer.removeAll();
-        backingGraphicsLayer.addMany(graphics);
-        view.goTo(graphics);
-        view.popup.visible = false;
-
-        view.on("click", function() {
+        function startAnimation() {
           view.ui.empty("top-left");
-          document.body.style.cursor = 'none';
+          document.body.style.cursor = "none";
+          document.getElementById("instructions").style.display = "none";
+          clickEvent.remove();
+
+          hopsGraphicsLayer.removeAll();
+          citiesGraphicsLayer.removeAll();
+
           // Delay the animation very slightly from clearing the UI
           // This allows us to cut appropriately in Video Editing software if recording
           // the animation...
-          window.setTimeout(function(){ animateLines(); }, 750);
-        });
+          window.setTimeout(function (){ 
 
-        function animateLines() {
-          var start;
-          var currentIndex = 0;
-          var lastPointCount = 0;
+            var tripAnimation = doAnimation(cityHops, hopsGraphicsLayer, citiesGraphicsLayer);
 
-          var completedSegmentsPolyline = new Polyline({
-            spatialReference: {
-              wkid: 102100
-            }
-          });
+            tripAnimation.then(function () {
 
-          var totalGraphic = new Graphic({
-            symbol: new SimpleLineSymbol({
-              color: [255,0,0, 1],
-              width: 3
-            })
-          });
+              window.setTimeout(function restoreUI() {
+                
+                view.ui.add(new Zoom({
+                  view: view
+                }), "top-left");                
+                document.body.style.cursor = "default";
+                document.getElementById("instructions").style.display = "";
 
-          totalLineGraphicsLayer.removeAll();
-          totalLineGraphicsLayer.add(totalGraphic);
-          
-          window.requestAnimationFrame(updateLine); 
-          
-          function updateLine(timeStamp) { 
-            if (!start) {
-              start = timeStamp;
-            }
+                clickEvent = view.on("click", startAnimation);
 
-            var currentSegmentInfo = linesAndCities[currentIndex];
-            if (currentIndex == 0) {
-              showCity(currentSegmentInfo.startCity);
-            }
+              }, 750);
 
+            }); 
 
-            var subLine = getSubline(currentSegmentInfo.geodesicLine, timeStamp, start, segmentAnimationDuration * 1000);
+          }, 750);
+        }
 
-            var subLineCount = pointsInLine(subLine);
+        function doAnimation(cityHops, hopsGraphicsLayer, citiesGraphicsLayer) {
+          var deferred = new Deferred();
 
-            if (subLineCount == lastPointCount) {
-              window.requestAnimationFrame(updateLine);
-              return
-            }
-            lastPointCount = subLineCount;
+          hopsGraphicsLayer.removeAll();
+          citiesGraphicsLayer.removeAll();
 
-            var segmentProgress = subLineCount / pointsInLine(currentSegmentInfo.geodesicLine);
+          startHopAnimation();
+            
+          return deferred;
 
-            var totalTravelLine = completedSegmentsPolyline.paths.length == 0 ? subLine : geometryEngine.union([completedSegmentsPolyline, subLine]);
+          function startHopAnimation() {
+            var start;
+            var currentIndex = 0;
+            var lastPointCount = 0;
 
-            totalGraphic = new Graphic({
-              geometry: totalTravelLine,
-              symbol: new SimpleLineSymbol({
-                color: [255,0,0],
-                width: 3
-              })
+            var completedHopsLine = new Polyline({
+              spatialReference: view.spatialReference
             });
 
-            // totalGraphic.geometry = totalTravelLine;
+            window.requestAnimationFrame(updateAnimation); 
 
-            totalLineGraphicsLayer.removeAll();
-            totalLineGraphicsLayer.add(totalGraphic);
+            function updateAnimation(timeStamp) { 
+              // Let's figure out where we should be in the animation for this timestamp.
+              var currentHopInfo = cityHops[currentIndex];
 
-            var segLen = geometryEngine.geodesicLength(subLine, "miles");
-            var totLen = geometryEngine.geodesicLength(totalTravelLine, "miles");
-
-            // console.log(Math.round(segmentProgress*100) + "% done with segment " + (currentIndex+1) + " of " + linesAndCities.length + " [" + segLen + " miles, total " + totLen + " miles]");
-
-            if (segmentProgress == 1) {
-              for (var p=0; p < subLine.paths.length; p++) {
-                completedSegmentsPolyline.addPath(subLine.paths[p]);
+              if (!start) {
+                // If we just started a hop, we remember this timestamp.
+                start = timeStamp;
+                if (currentIndex == 0) {
+                  showCity(currentHopInfo.startCity, citiesGraphicsLayer);
+                }
               }
-              currentIndex += 1;
-              start = undefined;
-              lastPointCount = 0;
 
-              showCity(currentSegmentInfo.endCity);
-            }
+              // Get as much line as we need for as far through this hop's animation as we are
+              var subLine = getSubline(currentHopInfo.geodesicLine, timeStamp, start, hopAnimationDuration * 1000);
 
-            if (currentIndex < linesAndCities.length) {
-              window.requestAnimationFrame(updateLine); 
+              var subLineCount = pointsInLine(subLine);
+
+              if (subLineCount == lastPointCount) {
+                // Nothing to update since last animation call - jump on out
+                window.requestAnimationFrame(updateAnimation);
+                return
+              }
+
+              lastPointCount = subLineCount;
+
+              var hopProgress = subLineCount / pointsInLine(currentHopInfo.geodesicLine);
+
+              var totalTravelLine = completedHopsLine.paths.length == 0 ? subLine : geometryEngine.union([completedHopsLine, subLine]);
+
+              var totalGraphic = new Graphic({
+                geometry: totalTravelLine
+              });
+
+              hopsGraphicsLayer.removeAll();
+              hopsGraphicsLayer.add(totalGraphic);
+
+              var segLen = geometryEngine.geodesicLength(subLine, "miles");
+              var totLen = geometryEngine.geodesicLength(totalTravelLine, "miles");
+
+              // console.log(Math.round(hopProgress*100) + "% done with segment " + (currentIndex+1) + " of " + cityHops.length + " [" + segLen + " miles, total " + totLen + " miles]");
+
+              if (hopProgress == 1) {
+                for (var p=0; p < subLine.paths.length; p++) {
+                  completedHopsLine.addPath(subLine.paths[p]);
+                }
+                currentIndex += 1;
+                start = undefined;
+                lastPointCount = 0;
+
+                showCity(currentHopInfo.endCity, citiesGraphicsLayer);
+              }
+
+              if (currentIndex < cityHops.length) {
+                window.requestAnimationFrame(updateAnimation); 
+              } else {
+                deferred.resolve();
+              }
             }
           }
         }
-
-        function showCity(city) {
-          citiesGraphicsLayer.add(city);
-          labelCity(city);
-        }
-
-        var yOffsetCities = [3,4,9,13,17,19,20,23,25,30,42];
-        var leftAlignCities = [1,5,6,11,15,22,23,24,27,33,38,42,44];
-        var rightAlignCities = [8,16,17,18,19,21,28,30,34,35,36,37,39,40,43];
-
-        function labelCity(city) {
-          var yOffset = (yOffsetCities.indexOf(city.attributes.Sequence) > -1) ? -14 : 7;
-          var alignment = (leftAlignCities.indexOf(city.attributes.Sequence) > -1) ? "left" : ((rightAlignCities.indexOf(city.attributes.Sequence) > -1) ? "right" : "center");
-
-          var labelGraphic = new Graphic({
-            geometry: city.geometry,
-            symbol: new TextSymbol({
-              color: "white",
-              haloColor: "black",
-              haloSize: "3px",
-              text: city.attributes.City, // city.attributes.Sequence + ": " + city.attributes.City
-              xoffset: 0,
-              yoffset: yOffset,
-              horizontalAlignment: alignment,
-              font: {  // autocast as esri/symbols/Font
-                size: 12,
-                family: "sans-serif",
-                weight: "light"
-              }
-            })
-          });
-
-          citiesGraphicsLayer.add(labelGraphic);
-        }
-
       }
 
+
+
+      /// Data Visualization
+      function showCity(city, citiesGraphicsLayer) {
+        citiesGraphicsLayer.add(city);
+        citiesGraphicsLayer.add(labelForCity(city));
+      }
+
+      function labelForCity(city) {
+        var yOffset = city.attributes.__label_yOffset || 0;
+        var alignment = city.attributes.__label_alignment || "center";
+
+        var labelGraphic = new Graphic({
+          geometry: city.geometry,
+          symbol: new TextSymbol({
+            color: "white",
+            haloColor: "black",
+            haloSize: "3px",
+            text: city.attributes.City, // city.attributes.Sequence + ": " + city.attributes.City
+            xoffset: 0,
+            yoffset: yOffset,
+            horizontalAlignment: alignment,
+            font: {  // autocast as esri/symbols/Font
+              size: 12,
+              family: "sans-serif",
+              weight: "light"
+            }
+          })
+        });
+
+        return labelGraphic;
+      }
+
+
+      /// City Data Parsing
+      function parseCityHops(cityFeatures) {
+        var hops = [];
+        var hopCount = Math.max(cityFeatures.length, 0);
+        var hopAnimationDuration = totalAnimationDuration / hopCount,
+            framesPerHop = hopAnimationDuration * maxFramesPerSecond;
+
+        var labelConfig = {
+          offsetBelow: [3,4,9,13,17,19,20,23,25,30,42],
+          leftAlign: [1,5,6,11,15,22,23,24,27,33,38,42,44],
+          rightAlign: [8,16,17,18,19,21,28,30,34,35,36,37,39,40,43]
+        }
+
+        var previousCity = undefined;
+        for (var i=0; i < cityFeatures.length; i++) {
+          var city = cityFeatures[i];
+
+          var citySequence = city.attributes.Sequence,
+              yOffset = (labelConfig.offsetBelow.indexOf(citySequence) > -1) ? -14 : 7,
+              alignment = (labelConfig.leftAlign.indexOf(citySequence) > -1) ? "left" : 
+                            ((labelConfig.rightAlign.indexOf(citySequence) > -1) ? "right" : "center");
+
+          city.attributes["__label_yOffset"] = yOffset;
+          city.attributes["__label_alignment"] = alignment;
+
+          if (previousCity !== undefined) {
+            var prevPoint = previousCity.geometry,
+                currPoint = city.geometry,
+                hopLine = new Polyline({
+                  paths: [[prevPoint.x, prevPoint.y], [currPoint.x, currPoint.y]],
+                  spatialReference: view.spatialReference
+                }),
+                hopLength = geometryEngine.geodesicLength(hopLine, "miles"),
+                densifyLength = hopLength / framesPerHop,
+                geodesicHopLine = geometryEngine.geodesicDensify(hopLine, densifyLength, "miles");
+
+
+            hops.push({
+              startCity: previousCity,
+              endCity: city,
+              line: hopLine,
+              geodesicLine: geodesicHopLine
+            });
+          }
+
+          previousCity = city;
+        }
+
+        return hops;
+      }
+
+
+      /// Polyline Utility Functions
       function pointsInLine(polyline) {
         var pointCount = 0;
         for (var p=0; p < polyline.paths.length; p++) {
@@ -323,10 +351,10 @@
         return pointCount;
       }
 
-
       function getSubline(totalLine, timeStamp, startTime, duration) {
         var progress = (timeStamp - startTime) / duration,
-            lastPointIndex = Math.round(framesPerSegment * progress);
+            lastPointIndex = Math.round(totalLine.paths[0].length * progress);
+            // ^^^ Assumes we have just one path with all the points in it.
 
         // Assuming a single path with multiple points
         var subLine = new Polyline({
@@ -336,12 +364,12 @@
         
         return subLine;
       }
-
     });
   </script>
 </head>
 
 <body>
+  <div id="instructions">Click the map to animate</div>
   <div id="viewDiv"></div>
 </body>
 </html>
