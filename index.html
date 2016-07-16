@@ -25,6 +25,7 @@
       z-index: 1000;
       font-family: Sans-Serif;
       pointer-events: none;
+      opacity: 0.6;
     }
   </style>
 
@@ -36,26 +37,37 @@
       "esri/views/MapView",
       "esri/layers/FeatureLayer",
       "esri/layers/TileLayer",
-      "esri/renderers/SimpleRenderer",
-      "esri/tasks/QueryTask",
-      "esri/tasks/support/Query",
-      "esri/Graphic",
       "esri/layers/GraphicsLayer",
+      "esri/renderers/SimpleRenderer",
       "esri/symbols/SimpleMarkerSymbol",
       "esri/symbols/SimpleLineSymbol",
       "esri/symbols/TextSymbol",
+      "esri/Graphic",
       "esri/geometry/Polyline",
       "esri/geometry/geometryEngine",
+      "esri/tasks/QueryTask",
+      "esri/tasks/support/Query",
       "esri/widgets/Zoom",
       "esri/core/watchUtils",
       "dojo/Deferred",
       "dojo/domReady!"
-    ], function(Map, MapView, FeatureLayer, TileLayer, SimpleRenderer, QueryTask, Query, Graphic, GraphicsLayer, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol, Polyline, geometryEngine, Zoom, watchUtils, Deferred) {
+    ], function(Map, MapView, 
+      FeatureLayer, TileLayer, GraphicsLayer, 
+      SimpleRenderer, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol, 
+      Graphic, Polyline, geometryEngine,
+      QueryTask, Query,
+      Zoom, watchUtils, Deferred) {
 
+
+
+      // Config variables
       var totalAnimationDuration = 30.0;
       var maxFramesPerSecond = 30;
       var stopsServiceURL = "https://services.arcgis.com/OfH668nDRN7tbJh0/arcgis/rest/services/ConnectedStates/FeatureServer/0";
 
+
+
+      // Set up some layers to show the animation
       var hopsGraphicsLayer = new GraphicsLayer({
             renderer: new SimpleRenderer({
               symbol: new SimpleLineSymbol({
@@ -102,12 +114,12 @@
 
 
 
-      // Create query task to load the stops      
+      // Create query task to load the cities
       var queryTask = new QueryTask({
         url: stopsServiceURL
       });
 
-      // Only return three fields
+      // Make sure we get back the attributes we need, and order appropriately
       var query = new Query({
         returnGeometry: true,
         outFields: ["City", "State", "Sequence"],
@@ -115,9 +127,10 @@
         orderByFields: ["Sequence"]
       });
 
-      // Perform query when page loads, parse the data, and prepare the data for animation.
+      // Perform query when page loads
       queryTask.execute(query).then(function(results) {
         watchUtils.whenTrueOnce(view, "ready", function() {
+          // Parse the data, and prepare the data for animation
           var cityHops = parseCityHops(results.features);
 
           // Zoom Map
@@ -128,7 +141,6 @@
           cueCityHopsAnimation(cityHops);
         });
       });
-
 
 
 
@@ -147,7 +159,7 @@
           hopsGraphicsLayer.removeAll();
           citiesGraphicsLayer.removeAll();
 
-          // Delay the animation very slightly from clearing the UI
+          // Delay the animation very slightly after clearing the UI
           // This allows us to cut appropriately in Video Editing software if recording
           // the animation...
           window.setTimeout(function (){ 
@@ -217,6 +229,7 @@
                 return
               }
 
+              // We need to update the polyline graphic as part of the animation.
               lastPointCount = subLineCount;
 
               var hopProgress = subLineCount / pointsInLine(currentHopInfo.geodesicLine);
@@ -230,15 +243,18 @@
               hopsGraphicsLayer.removeAll();
               hopsGraphicsLayer.add(totalGraphic);
 
-              var segLen = geometryEngine.geodesicLength(subLine, "miles");
-              var totLen = geometryEngine.geodesicLength(totalTravelLine, "miles");
-
+              // var segLen = geometryEngine.geodesicLength(subLine, "miles");
+              // var totLen = geometryEngine.geodesicLength(totalTravelLine, "miles");
               // console.log(Math.round(hopProgress*100) + "% done with segment " + (currentIndex+1) + " of " + cityHops.length + " [" + segLen + " miles, total " + totLen + " miles]");
 
+              // If we reached the end of a hop, display the city that's at the end of it and move on to the next hop.
               if (hopProgress == 1) {
+                // First update the overall "completed hops" polyline.
                 for (var p=0; p < subLine.paths.length; p++) {
                   completedHopsLine.addPath(subLine.paths[p]);
                 }
+
+                // Move on to the next hop and reset the timing info
                 currentIndex += 1;
                 start = undefined;
                 lastPointCount = 0;
@@ -246,6 +262,7 @@
                 showCity(currentHopInfo.endCity, citiesGraphicsLayer);
               }
 
+              // Check if we're done. If we are, good, resolve the deferred and get outta here. Otherwise, repeat when the next animation opportunity comes up.
               if (currentIndex < cityHops.length) {
                 window.requestAnimationFrame(updateAnimation); 
               } else {
